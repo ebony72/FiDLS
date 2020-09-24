@@ -1,0 +1,32 @@
+QFilter types (string):
+9 :: if no filter is used,
+0 :: if Q0 is used for all layers,
+01 :: if Q0 is used for the first layer and Q1 is used for the other layers,
+01x :: if Q0 is used for the first layer and Q0+Q1 is used for the other layers,
+1x :: if Q0+Q1 is used for all layers 
+('QFilter, GVal, DVal, SIZE, initial_mapping  =', '01y', True, 'all', 'top')
+('lev, slayer, gamma, stop, anchor =', 3, 0, 0, 10, True)
+In this test, we use Type 01y filter and top initial mapping for all circuits on sycamore
+*****************************************
+Tue Sep 22 21:11:00 2020
+(2, 'H2_cmplt_JW_ccpvdz', 20, 14616, 16452, 1836, 70.73, 1.1256)
+(4, 'pf2_30_before', 30, 360, 360, 0, 0.01, 1.0)
+(6, 'pf4_20_before', 20, 1200, 1200, 0, 0.02, 1.0)
+(7, 'pf1_30_before', 30, 180, 180, 0, 0.0, 1.0)
+(14, 'pf2_20_before', 20, 240, 240, 0, 0.0, 1.0)
+(16, 'pf4_30_before', 30, 1800, 1800, 0, 0.04, 1.0)
+(17, 'pf1_20_before', 20, 120, 120, 0, 0.0, 1.0)
+(20, 'pf1_50_after', 50, 300, 492, 192, 0.12, 1.64)
+(23, 'pf2_40_after', 40, 1040, 1040, 0, 0.03, 1.0)
+(24, 'H2_cmplt_BK_ccpvdz', 20, 11344, 17155, 5811, 160.01, 1.5123)
+(27, 'LiH_frz_P_631g', 20, 13878, 18480, 4602, 120.4, 1.3316)
+(30, 'pf4_20_after', 20, 2440, 2440, 0, 0.04, 1.0)
+(33, 'pf2_30_after', 30, 780, 780, 0, 0.02, 1.0)
+(35, 'pf2_50_before', 50, 600, 1053, 453, 0.39, 1.755)
+(39, 'pf4_30_after', 30, 3660, 3660, 0, 0.09, 1.0)
+(40, 'pf1_40_before', 40, 240, 240, 0, 0.01, 1.0)
+(46, 'pf2_20_after', 20, 520, 520, 0, 0.01, 1.0)
+(48, 'pf2_50_after', 50, 1300, 2122, 822, 1.76, 1.6323)
+(51, 'pf2_40_before', 40, 480, 480, 0, 0.01, 1.0)
+The average ratio is 68814 : 55098 = 1.2489 
+The time spent for this test is 353.68 : 620.15
