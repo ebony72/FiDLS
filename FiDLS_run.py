@@ -1,9 +1,9 @@
 # (Re)Created on Aug 25, 2020 by Sanjiang Li || mrlisj@gmail.com
 #@ Sep 24, 2020
-'''The current version is quite different from what used in the TC paper, but uses the same pricinple!''' 
-'''For tokyo and B131 circuits, the results are even better both in effect and efficiency''' 
-'''For bigQ circuits, it works better than reported in the paper, showing that the inimap is better'''
-'''For q19x19, the current implementation of inimap and vfs seems quite slower!'''
+'''The current version is quite different from the version used in the TC paper, but uses the same pricinple!''' 
+'''For tokyo and B131 circuits, the results are even better in both effect and efficiency''' 
+'''For bigQ circuits, it performs better than reported in the paper, showing that the inimap is better'''
+'''For q19x19, the current implementation of inimap and vfs seems much slower!'''
 
 from ag import ArchitectureGraph # architecture graph
 from ag import q20, rochester, sycamore, qgrid
