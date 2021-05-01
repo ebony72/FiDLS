@@ -8,7 +8,6 @@ from utils import SPL, is_embeddable, hub, centre
 
 class ArchitectureGraph:
     def __init__(self, g):
-        """TMDD类"""
         if not isinstance(g, nx.Graph): raise Exception('Not a graph')
         #V = list(g.nodes())
         #V.sort()
