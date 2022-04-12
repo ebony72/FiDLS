@@ -1,6 +1,6 @@
 This repository is the Python implementation for algorithms introduced in 
-"Qubit Mapping Based on Subgraph Isomorphism and Filtered Limited-Depth Search" 
-(https://arxiv.org/abs/2004.07138, accepted for publication in IEEE Transactions on Computers, 06/09/2020). 
+"Qubit Mapping Based on Subgraph Isomorphism and Filtered Depth-Limited Search" 
+(https://arxiv.org/abs/2004.07138, published in IEEE Transactions on Computers, 70(11): 1777-1788 (2021)). 
 
 This is a significant revision of the April 22 version 
 (see https://github.com/BensonZhou1991/Qubit-Mapping-Subgraph-Isomorphism)
