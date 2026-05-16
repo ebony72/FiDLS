@@ -4,6 +4,8 @@
    LD a sublist of the index list of C
 '''
 #####\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
+import math
+
 import networkx as nx
 from vfs import Vf
 from qiskit import QuantumCircuit
@@ -450,38 +452,53 @@ def R_hat_3(tau, LTG, LTG1, LTG2, C, V, SPL): #Eq.4 in the paper
 
 
 def one_shot_map_extension(dic1, LD, C, Q, AG, V):
-    '''Extend current mapping (dic1) one step '''
+    '''Place ONE unmapped logical qubit at the physical qubit that minimizes
+    R_hat_3 over the first three layers of the remaining circuit.
+
+    Phase 3: fixed the broken R_hat call (was passing 7 args to a 9-arg
+    function with the wrong types). Now uses topgates_3_lev to extract the
+    layers and AG.SPL for distance lookups.
+    '''
     tau = map2tau(dic1, V)
     UnOcc = list(u for u in V if tau[u] == -1)
     Occ = list(u for u in V if tau[u] != -1)
-    if not Occ: 
-        '''Occ2 are phy. qubits which are 2-close to those occupied'''
-        Occ2 = V[:] 
+    if not Occ:
+        Occ2 = V[:]
     else:
-        Occ2 = list(u for u in UnOcc if min([AG.SPL[(u,v)] for v in Occ]) <= 2)
-    rhat = 100
+        Occ2 = [u for u in UnOcc if min(AG.SPL[(u, v)] for v in Occ) <= 2]
+    nl = len(Q)
+    LTG, LTG1, LTG2 = topgates_3_lev(LD, C, nl)
+    rhat = math.inf
+    cand = {}
     for q in Q:
         if q in tau: continue
-        for u in Occ2:            
-            '''Extend the mapping temporalliy'''
-            dic1_temp = tau2map(tau) 
-            dic1_temp.update({q:u}) #extend dict1_temp with cand
-            tau_temp = map2tau(dic1_temp,V) #extension
-            rhat_temp = R_hat(tau_temp, LD, C, V, SPL, 3, 0.8)
-            if rhat_temp >= rhat: continue
+        for u in Occ2:
+            dic1_temp = tau2map(tau)
+            dic1_temp.update({q: u})
+            tau_temp = map2tau(dic1_temp, V)
+            rhat_temp = R_hat(tau_temp, LTG, LTG1, LTG2, C, V, AG.SPL, 3, 0.8)
+            if rhat_temp >= rhat:
+                continue
             rhat = rhat_temp
-            cand = {q:u}
-    # print('0', rhat, cand, dic1)
-    dic1.update(cand)
-    # print('1', round(rhat,2), cand, dic1, len(dic1), len(Q))
+            cand = {q: u}
+    if cand:
+        dic1.update(cand)
     return dic1
 
 def map_completion(dic1, LD, C, Q, AG, V):
+    """Extend partial mapping `dic1` (logical -> physical) until all of Q is placed.
+
+    If one_shot_map_extension can't place anyone (Occ2 empty), we break to avoid
+    an infinite loop; the caller gets the best partial map we could produce.
+    """
+    if not dic1:
+        raise Exception('dic1 should be nonempty!')
     result = dic1
-    # print(type(result), len(result))
-    if not result: raise Exception('dic1 should be nonempty!')
     while len(result) < len(Q):
+        prev_len = len(result)
         result = one_shot_map_extension(result, LD, C, Q, AG, V)
+        if len(result) == prev_len:
+            break  # no further extension possible
     return result
 #\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
 

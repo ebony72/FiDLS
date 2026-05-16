@@ -1,26 +1,32 @@
 import networkx as nx
+import numpy as np
 #import matplotlib.pyplot as plt
 from utils import SPL, is_embeddable, hub, centre
 
 
-#spl = nx.shortest_path_length
-'''Introduce the AG class '''
+def _spl_matrix(g):
+    """Return an N x N NumPy array of shortest-path lengths.
+
+    Assumes nodes are integer-labeled 0..N-1 with no gaps (true for all
+    topologies in this module). Used by router.py for O(1) distance lookups
+    in inner loops, replacing the slower dict-keyed SPL.
+    """
+    n = max(g.nodes()) + 1
+    M = np.full((n, n), -1, dtype=np.int32)
+    for u in g.nodes():
+        for v, d in nx.single_source_shortest_path_length(g, u).items():
+            M[u, v] = d
+    return M
+
 
 class ArchitectureGraph:
     def __init__(self, g):
         if not isinstance(g, nx.Graph): raise Exception('Not a graph')
-        #V = list(g.nodes())
-        #V.sort()
-        #EG = list(g.edges())
-        #EG.sort()
         self.graph = g
         if not nx.is_connected(g): raise Exception('The AG should be connected!')
-            # largest_cc = max(nx.connected_components(g), key=len)
-            # g = g.subgraph(largest_cc).copy() 
-        #self.node_list = V
-        #self.edge_list = EG
         self.diameter = nx.diameter(g)
-        self.SPL = SPL(g)
+        self.SPL = SPL(g)            # dict[(u,v) -> dist], kept for backward compat
+        self.spl_mat = _spl_matrix(g)  # ndarray[u,v -> dist], fast lookups
         
 # define the architecture graph
 # IBM Q Tokyo (Q20) 
@@ -122,6 +128,37 @@ def sycamore():
     # (True, {6: 13, 11: 18, 7: 19, 8: 26, 12: 25, 13: 31, 16: 24, 17: 30, 18: 37, 1: 7,\
     #    2: 14, 3: 20, 5: 6, 9: 32, 10: 12, 14: 38, 15: 17, 19: 43, 21: 29, 22: 36,\
     #    23: 42, 0: 2, 24: 49, 4: 27, 20: 23})
+
+def guadalupe():
+    g = nx.Graph()
+    g.add_nodes_from(list(range(0,16)))
+    E = [(0,1),(1,2),(2,3),(3,5),(5,8),(8,9),(8,11),(11,14),(13,14),(12,13),(12,15),(10,12),(7,10),(6,7),(4,7),(1,4)]
+    g.add_edges_from(E)
+    return g
+
+
+# Registry of named topologies. Use `build(name)` from entry points so adding
+# a new device only requires editing this dict.
+TOPOLOGIES = {
+    "tokyo":     q20,
+    "sycamore":  sycamore,
+    "rochester": rochester,
+    "guadalupe": guadalupe,
+    "q5x5":      lambda: qgrid(5, 5),
+    "q9x9":      lambda: qgrid(9, 9),
+    "q19x19":    lambda: qgrid(19, 19),
+}
+
+
+def build(name):
+    """Return an ArchitectureGraph by name. Raises KeyError with the list of
+    available topologies if `name` is unknown."""
+    if name not in TOPOLOGIES:
+        raise KeyError(
+            f"Unknown topology {name!r}. Available: {sorted(TOPOLOGIES)}"
+        )
+    return ArchitectureGraph(TOPOLOGIES[name]())
+
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 #_________________TEST_____________________________________________________________#

@@ -1,115 +1,105 @@
-# (Re)Created on Aug 25, 2020 by Sanjiang Li || mrlisj@gmail.com
-'''Call this module if you want to generate initial mappings for your own circuits:
-    1. Put your cirucits in a folder;
-    2. Change the path and select wgt or top in line 17 and ag in line 16
-    3. The initial mapping list is saved and you can run FiDLS_run to do QCT '''
+"""Precompute initial mappings for a folder of circuits and cache them.
 
-#import networkx as nx
-from ag import ArchitectureGraph # architecture graph
-from ag import q20, rochester, sycamore, qgrid
-from inimap import _tau_bsg_, _tau_bstg_ # two initial mappings
-from utils import  qubit_in_circuit, CreateCircuitFromQASM, ReducedCircuit
+Run this before FiDLS_run.py whenever you change architecture, mapping
+strategy, or circuit folder. Output is a JSON list of [idx, mapping_pairs]
+entries written to `inimap/_inimap_list_<ag>_<mapping>_<path-stem>.txt`.
+
+Example:
+    python FiDLS_inimap.py --ag tokyo --mapping top --path B131/
+"""
+import argparse
 import json
 import os
 import time
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-anchor, lev, stop, ag =  True, 3, 10, 'q19x19'
-initial_mapping = 'top' #'top', 'wgt'
-   
-path = "B131/"
-# path = "bigQ/"
-# path = "BNTF/"
 
-'''name2 for reading and writing inimap'''
-name2 = '_inimap_list_' + ag + '_' + initial_mapping + '_' + path[0:-1]
-
-# define the architecture graph
-global AG
-if ag == 'tokyo': AG = ArchitectureGraph(q20())
-elif ag == 'sycamore': AG = ArchitectureGraph(sycamore())
-elif ag == 'rochester': AG = ArchitectureGraph(rochester())
-elif ag == 'q19x19': AG = ArchitectureGraph(qgrid(19,19))
-elif ag == 'q5x5': AG = ArchitectureGraph(qgrid(5,5))
-elif ag == 'q9x9': AG = ArchitectureGraph(qgrid(9,9))
-
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-def save_result(name, content):
-    # pass
-    name = str(name)
-    content = str(content)
-    file = open("inimap/ohmy" + name2 + ".txt", mode = 'a')
-    file.write(content)
-    file.write('\n')
-    file.close()
+import ag as ag_mod
+from inimap import _tau_bsg_, _tau_bstg_
+from utils import (
+    CreateCircuitFromQASM, ReducedCircuit, qubit_in_circuit,
+)
 
 
-content = time.asctime()
-print(content)
-# save_result(name, content)
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--ag", default="tokyo",
+                   choices=sorted(ag_mod.TOPOLOGIES),
+                   help="Architecture graph name (default tokyo).")
+    p.add_argument("--mapping", default="top", choices=["top", "wgt"],
+                   help="Initial mapping strategy (default top).")
+    p.add_argument("--path", default="B131/",
+                   help="Directory of input circuits (default B131/).")
+    p.add_argument("--anchor", action="store_true", default=True,
+                   help="Use anchor in subgraph-isomorphism search (default on).")
+    p.add_argument("--no-anchor", dest="anchor", action="store_false")
+    p.add_argument("--stop", type=float, default=10.0,
+                   help="VF2 time budget in seconds (default 10).")
+    p.add_argument("--out-dir", default="inimap",
+                   help="Output directory (default inimap/).")
+    return p.parse_args(argv)
 
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-global EG
-global V
-G = AG.graph
-EG = AG.graph.edges()
-V = AG.graph.nodes()
-SPL = AG.SPL
-files = os.listdir(path) 
-t_start = time.time()
-count = 0
-IM = []
 
-for file_name in files:
-    timeA = time.time()
-    count += 1
-    if file_name[-4:] == 'qasm':
-        cir = CreateCircuitFromQASM(file_name, path)
-        C = ReducedCircuit(cir)
-    else: #C is a list
-        with open(path + file_name, 'r') as f:
-            sqn = json.loads(f.read())
-        C = sqn
-    l = len(C)
-    if path == 'bigQ/':
-        if count in {19,21,34,42,44,47,49}: continue 
-            #duplicate circuits!! 19=2, 21=20, 34=17, 42=7, 44=27, 47=24, 49=40
-        if l > 15000: continue  
-    L = list(range(l))
-    Q = qubit_in_circuit(L,C)
-    if len(Q) > len(V): continue
-    print('Cir.%s: %s has %s qubits and %s gates' %(count, file_name[0:-9], len(Q), l))
+def cache_path_for(args):
+    path_stem = args.path.rstrip("/")
+    name2 = f"_inimap_list_{args.ag}_{args.mapping}_{path_stem}"
+    return os.path.join(args.out_dir, name2 + ".txt")
 
-    #\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-      ### select an initial mapping ### 
-    #\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\ 
-    _map_ = dict()
-    if initial_mapping == 'wgt': # weighted graph initial mapping
-        _map_ = _tau_bsg_(C, G, anchor, stop)
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    AG = ag_mod.build(args.ag)
+    G = AG.graph
+    V = list(G.nodes())
+
+    print(time.asctime())
+    print(f"Computing initial mappings: ag={args.ag}, mapping={args.mapping}, "
+          f"path={args.path}, anchor={args.anchor}, stop={args.stop}")
+
+    files = os.listdir(args.path)
+    IM = []
+    t_start = time.time()
+    count = 0
+
+    for file_name in files:
+        count += 1
+        if file_name.endswith("qasm"):
+            cir = CreateCircuitFromQASM(file_name, args.path)
+            C = ReducedCircuit(cir)
+        else:
+            with open(args.path + file_name, "r") as f:
+                C = json.loads(f.read())
+        l = len(C)
+        if args.path.rstrip("/") == "bigQ":
+            if count in {19, 21, 34, 42, 44, 47, 49}:
+                continue
+            if l > 15000:
+                continue
+
+        L = list(range(l))
+        Q = qubit_in_circuit(L, C)
+        if len(Q) > len(V):
+            continue
+        print(f"Cir.{count}: {file_name[:-9]} has {len(Q)} qubits and {l} gates")
+
+        if args.mapping == "wgt":
+            _map_ = _tau_bsg_(C, G, args.anchor, args.stop)
+        else:  # "top"
+            _map_ = _tau_bstg_(C, G, args.anchor, args.stop)
+
         print(_map_)
-        im = []
-        for key in _map_:
-            im.append([key, _map_[key]])
+        im = [[k, v] for k, v in _map_.items()]
         IM.append([count, im])
-    elif initial_mapping == 'top': # topsubgraph mapping
-        _map_ = _tau_bstg_(C, G, anchor, stop)
-        print(_map_)
-        im = []
-        for key in _map_:
-            im.append([key, _map_[key]])
-        IM.append([count, im])
-    else: 
-        pass
 
-    '''if _map_ is incomplete, we may complete it in a natural way'''  
-    # if len(_map_) < len(Q):
-    #     _map_ = map_completion(_map_, L, C, Q, AG, V)
-    #     print(_map_)
-    
-t_end = time.time()
-content = 'The time spent for this test is: %s' %round(t_end-t_start, 2)
-print(content)
-# save_result(name, content)
+    elapsed = round(time.time() - t_start, 2)
+    print(f"Computed {len(IM)} initial mappings in {elapsed}s.")
 
-content = IM
-save_result(name2, content)
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
+    os.makedirs(args.out_dir, exist_ok=True)
+    out_path = cache_path_for(args)
+    with open(out_path, "w") as f:
+        f.write(json.dumps(IM))
+    print(f"Saved to {out_path}")
+
+
+if __name__ == "__main__":
+    main()

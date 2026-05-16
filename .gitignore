@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.DS_Store
+*.swp
+
+# Test/benchmark scratch
+.pytest_cache/
+.cache/
+*.log
+
+# LaTeX build artifacts (paper directory is a sibling; keep these ignored anyway)
+*.aux
+*.bbl
+*.blg
+*.out
+*.pdf
+*.synctex.gz
+
+# Python packaging
+build/
+dist/
+*.egg-info/

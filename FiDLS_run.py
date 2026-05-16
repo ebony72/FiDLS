@@ -1,201 +1,216 @@
-# (Re)Created on Aug 25, 2020 by Sanjiang Li || mrlisj@gmail.com
-#@ Sep 24, 2020
-'''The current version is quite different from the version used in the TC paper, but uses the same pricinple!''' 
-'''For tokyo and B131 circuits, the results are even better in both effect and efficiency''' 
-'''For bigQ circuits, it performs better than reported in the paper, showing that the inimap is better'''
-'''For q19x19, the current implementation of inimap and vfs seems much slower!'''
+"""Entry point: run FiDLS on a folder of QASM/JSON circuits and report stats.
 
-from ag import ArchitectureGraph # architecture graph
-from ag import q20, rochester, sycamore, qgrid
-# from inimap import _tau_bsg_, _tau_bstg_ # two initial mappings
-from utils import centre, hub, graph_of_circuit
-from utils import  qubit_in_circuit, CreateCircuitFromQASM, ReducedCircuit
+Example:
+    python FiDLS_run.py --ag tokyo --variant G --filter 01y \
+        --mapping top --size medium --path B131/
+
+For each circuit, prints a row:
+    (idx, name, num_qubits, in_cnots, out_cnots, added_cnots, time_s, ratio)
+
+If `--mapping` is 'top' or 'wgt', the script reads a precomputed inimap cache
+from `inimap/_inimap_list_<ag>_<mapping>_<path-stem>.txt`. Run
+`FiDLS_inimap.py` first to generate it.
+"""
+import argparse
 import json
 import os
+import sys
 import time
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-'''The preferred QFilter is '01y', which uses Q0+Q1 as 1st filter and Q0 else'''
-QFilter, anchor, lev, stop, ag, SIZE = '01y', True, 3, 10, 'tokyo', 'medium'
-initial_mapping = 'top' #'top', 'wgt', 'empty', 'naive'
-   
-path = "B131/"
-# path = "bigQ/"
-# path = "BNTF/"
 
-name = ag + '_' + QFilter + '_' + initial_mapping + '_' + path[0:-1] + '_'+ SIZE + '_' 
-'''name2 for reading and writing inimap'''
-name2 = '_inimap_list_' + ag + '_' + initial_mapping + '_' + path[0:-1]
+import ag as ag_mod
+from router import qct
+from utils import (
+    CreateCircuitFromQASM, ReducedCircuit, centre, hub,
+    graph_of_circuit, qubit_in_circuit, map_completion,
+)
 
-GVal = True # test fidls_g
-# GVal = False
-if GVal: 
-    from fidls_g import qct_old
-    name += '_G_old_'
-    slayer, gamma = 0, 0
-else:
-    from fidls_d import qct_old
-    name += '_D_old_'
-    slayer, gamma = 2, 0.8
 
-# define the architecture graph
-global AG
-if ag == 'tokyo': AG = ArchitectureGraph(q20())
-elif ag == 'sycamore': AG = ArchitectureGraph(sycamore())
-elif ag == 'rochester': AG = ArchitectureGraph(rochester())
-elif ag == 'q19x19': AG = ArchitectureGraph(qgrid(19,19))
-elif ag == 'q5x5': AG = ArchitectureGraph(qgrid(5,5))
-elif ag == 'q9x9': AG = ArchitectureGraph(qgrid(9,9))
+SIZE_FILTERS = {
+    "small":  lambda n: n < 100,
+    "medium": lambda n: 100 <= n <= 1000,
+    "large":  lambda n: n > 1000,
+    "all":    lambda n: True,
+}
 
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-def save_result(name, content):
-    pass
-    # name = str(name)
-    # content = str(content)
-    # file = open("testRecord/0924-" + name + ".txt", mode = 'a')
-    # file.write(content)
-    # file.write('\n')
-    # file.close()
+# Hardcoded skip-list for bigQ/ (duplicate circuits, mirrored from original).
+BIGQ_DUPLICATE_INDICES = {19, 21, 34, 42, 44, 47, 49}
+BIGQ_MAX_GATES = 15000
 
-content = 'QFilter, GVal, SIZE, initial_mapping  =', QFilter, GVal, SIZE, initial_mapping
-save_result(name, content)
-content = 'lev, slayer, gamma, stop, anchor =', lev, slayer, gamma, stop, anchor
-save_result(name, content)
 
-content = 'In this test, we use Type %s filter and %s initial mapping for %s circuits on %s'\
-    %(QFilter, initial_mapping, SIZE, ag)
-print(content)
-save_result(name, content)
-content = '*****************************************'
-save_result(name, content)
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--ag", default="tokyo",
+                   choices=sorted(ag_mod.TOPOLOGIES),
+                   help="Architecture graph name (default: tokyo).")
+    p.add_argument("--variant", default="G", choices=["G", "D"],
+                   help="FiDLS variant: G (1-layer lookahead) or D (3-layer). "
+                        "Default G.")
+    p.add_argument("--filter", dest="qfilter", default="01y",
+                   choices=["9", "0", "01", "01x", "01y", "1x"],
+                   help="Q-filter type (default 01y).")
+    p.add_argument("--mapping", default="top",
+                   choices=["top", "wgt", "empty", "naive"],
+                   help="Initial mapping strategy (default top).")
+    p.add_argument("--size", default="medium",
+                   choices=sorted(SIZE_FILTERS),
+                   help="Circuit size filter (default medium).")
+    p.add_argument("--path", default="B131/",
+                   help="Directory of input circuits (default B131/).")
+    p.add_argument("--log", default=None,
+                   help="Optional path to append per-circuit results. "
+                        "If unset, results only go to stdout.")
+    p.add_argument("--only", type=int, default=None,
+                   help="Process only circuit #N (1-indexed) for quick checks.")
+    p.add_argument("--complete-init", action="store_true", default=False,
+                   help="Greedily complete partial initial mappings before "
+                        "routing. Off by default — the router's online SRMD "
+                        "extension usually produces better placement. Useful "
+                        "for very large topologies (e.g. q19x19) where VF2 "
+                        "leaves many logical qubits unplaced.")
+    return p.parse_args(argv)
 
-content = time.asctime()
-print(content)
-save_result(name, content)
 
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-global EG
-global V
-G = AG.graph
-EG = AG.graph.edges()
-V = AG.graph.nodes()
-SPL = AG.SPL
-files = os.listdir(path) 
-t_start = time.time()
-count = 0
-sum_in = 0
-sum_out = 0
-COST_TIME = 0
+def load_inimap_cache(args):
+    """Load precomputed initial mappings keyed by circuit index."""
+    path_stem = args.path.rstrip("/")
+    name2 = f"_inimap_list_{args.ag}_{args.mapping}_{path_stem}"
+    cache_path = os.path.join("inimap", name2 + ".txt")
+    try:
+        with open(cache_path, "r") as f:
+            return json.loads(f.read()), cache_path
+    except FileNotFoundError:
+        sys.exit(
+            f"Initial-mapping cache not found at {cache_path}.\n"
+            f"Run: python FiDLS_inimap.py --ag {args.ag} "
+            f"--mapping {args.mapping} --path {args.path}"
+        )
 
-IM = []
-'''Load the precomputed inimap list! If no such list, create one using FiDLS_inimap'''
-if initial_mapping in {'top', 'wgt'}:
-    with open('inimap/' + name2 + '.txt', 'r') as f:
-        IM = json.loads(f.read())
 
-for file_name in files:
-    timeA = time.time()
-    count += 1
-    # if count != 2: continue
-    if file_name[-4:] == 'qasm':
-        cir = CreateCircuitFromQASM(file_name, path)
-        C = ReducedCircuit(cir)
-    else: #C is a list
-        with open(path + file_name, 'r') as f:
-            sqn = json.loads(f.read())
-        C = sqn
-    l = len(C)
-    if path == 'bigQ/':
-        if count in {19,21,34,42,44,47,49}: continue 
-            #duplicate circuits!! 19=2, 21=20, 34=17, 42=7, 44=27, 47=24, 49=40
-        if l > 15000: continue  
-    if SIZE == 'small':
-        if l >= 100: continue
-    if SIZE == 'medium':
-        if l>1000 or l<100: continue
-    if SIZE == 'large':
-        if l <= 1000: continue
-    L = list(range(l))
-    Q = qubit_in_circuit(L,C)
-    if len(Q) > len(V): continue
-    print('Cir.%s: %s has %s qubits and %s gates' %(count, file_name[0:-9], len(Q), l))
-
-    #\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
-      ### select an initial mapping ### 
-    #\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\ 
-    _map_ = dict()
-    if initial_mapping == 'wgt': # weighted graph initial mapping
-        # _map_ = _tau_bsg_(C, G, anchor, stop) 
-        imlist = IM[count-1][1] 
-        for x in imlist:
-            _map_[x[0]] = x[1]
-        print(_map_)
-        
-        # im = []
-        # for key in _map_:
-        #     im.append([key, _map_[key]])
-        # IM.append([count, im])
-    elif initial_mapping == 'empty': #empty mapping
+def initial_mapping_for(args, IM, count, C, G, V):
+    """Construct the (logical -> physical) dict for circuit #count."""
+    if args.mapping in ("top", "wgt"):
+        # Cached: IM is a list of [idx, [[q, v], ...]] entries.
+        imlist = IM[count - 1][1]
+        return {x[0]: x[1] for x in imlist}
+    if args.mapping == "empty":
         g_of_c = graph_of_circuit(C)
-        p, q = centre(g_of_c), hub(g_of_c)        
-        u, v = centre(G), hub(G)
-        _map_[q] = v
-    elif initial_mapping == 'top': # topsubgraph mapping
-        # _map_ = _tau_bstg_(C, G, anchor, stop)
-        imlist = IM[count-1][1]
-        # print(count, IM[count-1])
-        for x in imlist:
-            _map_[x[0]] = x[1]
-        # print(_map_)
-        # content = count, file_name, _map_, round(time.time()-timeA, 2)
-        # save_result(name2, content)
-        # im = []
-        # for key in _map_:
-        #     im.append([key, _map_[key]])
-        # IM.append([count, im])
-        
-        '''if _map_ is incomplete, we may complete it in a natural way'''  
-        # if len(_map_) < len(Q):
-        #     _map_ = map_completion(_map_, L, C, Q, AG, V)
-        #     print(_map_)
-            
-    elif initial_mapping == 'naive': #naive mapping
-        for i in range(len(Q)):
-            _map_[i] = i
-    else: 
-        pass
+        q = hub(g_of_c)
+        v = hub(G)
+        return {q: v}
+    if args.mapping == "naive":
+        Q = qubit_in_circuit(list(range(len(C))), C)
+        return {i: i for i in range(len(Q))}
+    raise ValueError(f"unknown mapping {args.mapping}")
 
-# t_end = time.time()
-# content = 'The time spent for this test is: %s' %round(t_end-t_start, 2)
-# print(content)
-# save_result(name, content)
 
-# content = IM
-# save_result(name, content)
-    
-    tau = [-1]*len(V)
-    for key in _map_: # map physical qubit BB[key] to logic qubit key
-        tau[_map_[key]] = key
-    ##################################################################
-    sum_in += l
-    # C_out, cost_time = qct(tau, C, Q, AG, EG, V, SPL, QFilter, lev, slayer, gamma, GVal)
-    
-    '''Compare with old version '''
-    C_out, cost_time = qct_old(tau, C, Q, G, EG, V, SPL, QFilter)
+def open_log(path):
+    """Return a callable that writes a line to the log file (and stdout)."""
+    if path is None:
+        return lambda s: None
+    fh = open(path, "a")
 
-    COST_TIME += cost_time
-    sum_out += len(C_out)
-    
-    content = count, file_name[0:-9], len(Q), l, len(C_out), len(C_out)-l,\
-        round(cost_time,2), round(len(C_out)/l, 4)
-    
-    print(content)
-    save_result(name, content)
-content = 'The average ratio is %s:%s = %s' %(sum_out, sum_in, round(sum_out/sum_in,4))
-print(content)
-save_result(name, content)
-t_end = time.time()
-content = 'The time spent for this test is %s : %s'\
-            %(round(COST_TIME,2), round(t_end-t_start, 2))
-print(content)
-save_result(name, content)
-#\__/#\#/\#\__/#\#/\__/--\__/#\__/#\#/~\
+    def write(s):
+        fh.write(str(s) + "\n")
+        fh.flush()
+    return write
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    AG = ag_mod.build(args.ag)
+    G = AG.graph
+    # EG must support symmetric `(u, v) in EG` lookups (used by utils.entail).
+    # NetworkX EdgeView does that natively; list(G.edges()) does not.
+    EG = G.edges()
+    V = list(G.nodes())
+    SPL = AG.SPL
+    SPL_mat = AG.spl_mat  # NumPy matrix passed to router for fast inner-loop lookups
+
+    log = open_log(args.log)
+    print(time.asctime())
+    log(time.asctime())
+    header = (f"FiDLS-{args.variant} on {args.ag} | filter={args.qfilter} | "
+              f"mapping={args.mapping} | size={args.size} | path={args.path}")
+    print(header)
+    log(header)
+
+    IM = None
+    if args.mapping in ("top", "wgt"):
+        IM, cache_path = load_inimap_cache(args)
+        log(f"loaded initial mappings from {cache_path}")
+
+    size_ok = SIZE_FILTERS[args.size]
+    files = os.listdir(args.path)
+
+    sum_in = sum_out = 0
+    total_route_time = 0.0
+    t_start = time.time()
+    count = 0
+
+    for file_name in files:
+        count += 1
+        if args.only is not None and count != args.only:
+            continue
+        if file_name.endswith("qasm"):
+            cir = CreateCircuitFromQASM(file_name, args.path)
+            C = ReducedCircuit(cir)
+        else:
+            with open(args.path + file_name, "r") as f:
+                C = json.loads(f.read())
+        l = len(C)
+        if args.path.rstrip("/") == "bigQ":
+            if count in BIGQ_DUPLICATE_INDICES:
+                continue
+            if l > BIGQ_MAX_GATES:
+                continue
+        if not size_ok(l):
+            continue
+
+        L = list(range(l))
+        Q = qubit_in_circuit(L, C)
+        if len(Q) > len(V):
+            continue
+        print(f"Cir.{count}: {file_name[:-9]} has {len(Q)} qubits and {l} gates")
+
+        _map_ = initial_mapping_for(args, IM, count, C, G, V)
+
+        # Optional up-front completion of partial initial mappings. The router
+        # handles partial maps fine via online SRMD extension and usually
+        # produces better placement than greedy completion; we only invoke
+        # map_completion when --complete-init is set (e.g. for very large
+        # topologies where VF2 leaves many qubits unplaced).
+        if args.complete_init and len(_map_) < len(Q):
+            _map_ = map_completion(_map_, L, C, Q, AG, V)
+
+        tau = [-1] * len(V)
+        for log_q, phys_v in _map_.items():
+            tau[phys_v] = log_q
+
+        sum_in += l
+        C_out, cost_time = qct(tau, C, Q, G, EG, V, SPL,
+                               args.qfilter, variant=args.variant,
+                               spl_mat=SPL_mat)
+        total_route_time += cost_time
+        sum_out += len(C_out)
+
+        row = (count, file_name[:-9], len(Q), l, len(C_out), len(C_out) - l,
+               round(cost_time, 2), round(len(C_out) / l, 4))
+        print(row)
+        log(row)
+
+    if sum_in:
+        summary = f"average ratio = {sum_out}/{sum_in} = {round(sum_out/sum_in, 4)}"
+    else:
+        summary = "no circuits processed"
+    print(summary)
+    log(summary)
+    elapsed = round(time.time() - t_start, 2)
+    timing = f"routing time {round(total_route_time, 2)}s; total {elapsed}s"
+    print(timing)
+    log(timing)
+
+
+if __name__ == "__main__":
+    main()
